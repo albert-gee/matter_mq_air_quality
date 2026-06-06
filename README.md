@@ -61,6 +61,7 @@ Matter starts immediately and reports Air Quality `UNKNOWN` until MQ-135 is read
 
 ```text
 WARMING -> UNCALIBRATED -> READY
+MQ-7/MQ-9 after warm-up -> DIAGNOSTIC_ONLY
 ```
 
 Default warm-up/aging times are 48 h for MQ-135, MQ-2, MQ-4, MQ-6, MQ-7, MQ-8, and MQ-9, and 24 h for MQ-3 and MQ-5.
@@ -83,6 +84,8 @@ Default warm-up/aging times are 48 h for MQ-135, MQ-2, MQ-4, MQ-6, MQ-7, MQ-8, a
 9. Commission/read Matter:
    `matter onboardingcodes`
    `matter esp attribute get <air_quality_endpoint_id> 0x005b 0x0000`
+   `matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC01 0xFFF10000`
+   `matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC01 0xFFF10008`
 
 ## Console Commands
 
@@ -117,4 +120,14 @@ mq config-reset all
 
 The standard Matter Air Quality endpoint uses MQ-135 only. If MQ-135 is disabled, warming, uncalibrated, stale, or faulted, Air Quality is `UNKNOWN`.
 
-Per-sensor diagnostics stay in the `mq` console commands. The Matter data model exposes only the standard Air Quality value.
+All nine MQ sensors are Matter-readable as non-safety diagnostics on manufacturer-specific cluster `0xFFF1FC01` on the Air Quality endpoint. `0xFFF1` is a development/test vendor ID only and must be replaced with a real VID before production.
+
+The diagnostics cluster uses one scalar attribute block per sensor. Examples:
+
+```text
+sensor 0 SensorType  matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC01 0xFFF10000
+sensor 0 RsRatio     matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC01 0xFFF10008
+sensor 1 SensorType  matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC01 0xFFF10020
+sensor 8 SensorType  matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC01 0xFFF10100
+sensor 8 RsRatio     matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC01 0xFFF10108
+```

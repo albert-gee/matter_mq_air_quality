@@ -57,6 +57,45 @@ static matter_air_quality_level_t map_ratio_to_level(float ratio)
     return MATTER_AIR_QUALITY_EXTREMELY_POOR;
 }
 
+static int32_t ratio_to_milli(float value)
+{
+    if (value <= 0.0f) {
+        return 0;
+    }
+    return (int32_t)(value * 1000.0f + 0.5f);
+}
+
+static void init_diagnostics_defaults(matter_air_quality_diagnostics_t *diagnostics)
+{
+    memset(diagnostics, 0, sizeof(*diagnostics));
+    for (uint8_t i = 0; i < MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT; ++i) {
+        diagnostics->sensors[i].state = (uint8_t)MQ_SENSOR_STATE_FAULT;
+        diagnostics->sensors[i].raw_adc = -1;
+        diagnostics->sensors[i].adc_mv = -1;
+        diagnostics->sensors[i].vrl_mv = -1;
+    }
+}
+
+static void fill_sensor_diagnostics(matter_mq_sensor_diagnostics_t *out,
+                                    const mq_sensor_config_t *config,
+                                    const mq_sensor_sample_t *sample,
+                                    uint32_t age_ms)
+{
+    out->sensor_type = (uint8_t)config->type;
+    out->enabled = config->enabled;
+    out->state = (uint8_t)sample->state;
+    out->raw_adc = sample->raw_adc;
+    out->adc_mv = sample->adc_mv;
+    out->vrl_mv = sample->vrl_mv;
+    out->baseline_vrl_mv = sample->baseline_vrl_mv;
+    out->rs_norm_milli = ratio_to_milli(sample->rs_norm);
+    out->rs_ratio_milli = ratio_to_milli(sample->rs_ratio);
+    out->threshold_state = (uint8_t)sample->threshold_state;
+    out->fault_bitmap = sample->fault_bitmap;
+    out->last_update_age_ms = age_ms;
+    out->baseline_valid = sample->baseline_vrl_mv > 0 && sample->baseline_rs_norm > 0.0f;
+}
+
 static uint32_t aq_now_ms(void)
 {
     return (uint32_t)((uint64_t)xTaskGetTickCount() * (uint64_t)portTICK_PERIOD_MS);
@@ -94,13 +133,46 @@ static void aq_sample_once(void)
     config = s_config;
     aq_unlock();
 
+    const uint32_t now_ms = aq_now_ms();
+    matter_air_quality_diagnostics_t diagnostics;
+    init_diagnostics_defaults(&diagnostics);
+
     mq_sensor_sample_t sample;
     memset(&sample, 0, sizeof(sample));
     sample.id = config.primary_sensor_id;
     sample.state = MQ_SENSOR_STATE_FAULT;
+    sample.raw_adc = -1;
+    sample.adc_mv = -1;
+    sample.vrl_mv = -1;
+    esp_err_t read_err = ESP_ERR_NOT_FOUND;
 
-    esp_err_t read_err = mq_sensor_read(config.primary_sensor_id, &sample);
-    const uint32_t now_ms = aq_now_ms();
+    const size_t count = mq_sensor_count();
+    for (size_t i = 0; i < count; ++i) {
+        mq_sensor_config_t sensor_config;
+        if (mq_sensor_get_config_by_index(i, &sensor_config) != ESP_OK) {
+            continue;
+        }
+
+        mq_sensor_sample_t sensor_sample;
+        memset(&sensor_sample, 0, sizeof(sensor_sample));
+        sensor_sample.id = sensor_config.id;
+        sensor_sample.state = sensor_config.enabled ? MQ_SENSOR_STATE_FAULT : MQ_SENSOR_STATE_DISABLED;
+        sensor_sample.raw_adc = -1;
+        sensor_sample.adc_mv = -1;
+        sensor_sample.vrl_mv = -1;
+        const esp_err_t sensor_err = mq_sensor_read(sensor_config.id, &sensor_sample);
+        if (sensor_config.id < MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT) {
+            fill_sensor_diagnostics(&diagnostics.sensors[sensor_config.id],
+                                    &sensor_config,
+                                    &sensor_sample,
+                                    0);
+        }
+        if (sensor_config.id == config.primary_sensor_id) {
+            sample = sensor_sample;
+            read_err = sensor_err;
+        }
+    }
+
     matter_air_quality_level_t next_level = MATTER_AIR_QUALITY_UNKNOWN;
     bool should_publish = false;
 
@@ -150,6 +222,14 @@ static void aq_sample_once(void)
     s_status.current_level = next_level;
     should_publish = config.publish_to_matter && next_level != s_status.last_published_level;
     aq_unlock();
+
+    if (config.publish_to_matter) {
+        const esp_err_t diagnostics_err = matter_update_air_quality_diagnostics(config.matter_endpoint_id,
+                                                                               &diagnostics);
+        if (diagnostics_err != ESP_OK) {
+            ESP_LOGW(TAG, "failed to publish MQ diagnostics: %s", esp_err_to_name(diagnostics_err));
+        }
+    }
 
     if (!should_publish) {
         return;

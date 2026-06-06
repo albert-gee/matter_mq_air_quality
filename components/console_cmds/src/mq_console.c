@@ -16,6 +16,7 @@
 #include "esp_console.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "matter_air_quality.h"
 #include "mq_calibration_nvs.h"
 #include "mq_runtime_config.h"
 #include "mq_sensor.h"
@@ -597,6 +598,31 @@ static void validate_config(void)
             printf("error aq primary sensor 0 must be enabled MQ-135\n");
             ++errors;
         }
+    }
+
+    const uint32_t diagnostics_cluster_id = matter_air_quality_diagnostics_cluster_id();
+    if (diagnostics_cluster_id != MATTER_MQ_DIAGNOSTICS_CLUSTER_ID) {
+        printf("error Matter diagnostics cluster id invalid actual=0x%08lx expected=0x%08lx\n",
+               (unsigned long)diagnostics_cluster_id,
+               (unsigned long)MATTER_MQ_DIAGNOSTICS_CLUSTER_ID);
+        ++errors;
+    }
+    if (diagnostics_cluster_id == MATTER_MQ_DIAGNOSTICS_CLUSTER_SUFFIX) {
+        printf("error Matter diagnostics cluster id is suffix-only, not a valid MEI\n");
+        ++errors;
+    }
+    const size_t expected_diag_attrs = MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT *
+                                       MATTER_MQ_DIAGNOSTICS_ATTRS_PER_SENSOR;
+    const size_t actual_diag_attrs = matter_air_quality_diagnostics_attribute_count();
+    if (matter_air_quality_diagnostics_validate() != ESP_OK) {
+        printf("error Matter diagnostics cluster or attributes missing\n");
+        ++errors;
+    }
+    if (actual_diag_attrs != expected_diag_attrs) {
+        printf("error Matter diagnostics attr count actual=%u expected=%u\n",
+               (unsigned)actual_diag_attrs,
+               (unsigned)expected_diag_attrs);
+        ++errors;
     }
 
     printf("validation errors=%u warnings=%u\n", (unsigned)errors, (unsigned)warnings);

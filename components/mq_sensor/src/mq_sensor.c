@@ -400,8 +400,12 @@ esp_err_t mq_sensor_read(uint8_t id, mq_sensor_sample_t *out)
         return err;
     }
 
-    if (!s_configs[index].supports_baseline_calibration ||
-        !calibration_matches_config((size_t)index, &source)) {
+    if (!s_configs[index].supports_baseline_calibration) {
+        sample.baseline_vrl_mv = s_calibrations[index].valid ? (int)s_calibrations[index].baseline_vrl_mv : 0;
+        sample.baseline_rs_norm = s_calibrations[index].valid ? s_calibrations[index].baseline_rs_norm : 0.0f;
+        sample.rs_ratio = 0.0f;
+        sample.state = MQ_SENSOR_STATE_DIAGNOSTIC_ONLY;
+    } else if (!calibration_matches_config((size_t)index, &source)) {
         sample.baseline_vrl_mv = s_calibrations[index].valid ? (int)s_calibrations[index].baseline_vrl_mv : 0;
         sample.baseline_rs_norm = s_calibrations[index].valid ? s_calibrations[index].baseline_rs_norm : 0.0f;
         sample.rs_ratio = 0.0f;
@@ -506,6 +510,8 @@ const char *mq_sensor_state_to_string(mq_sensor_state_t state)
         return "stale";
     case MQ_SENSOR_STATE_FAULT:
         return "fault";
+    case MQ_SENSOR_STATE_DIAGNOSTIC_ONLY:
+        return "diagnostic-only";
     default:
         return "unknown";
     }
