@@ -101,6 +101,14 @@ static uint32_t aq_now_ms(void)
     return (uint32_t)((uint64_t)xTaskGetTickCount() * (uint64_t)portTICK_PERIOD_MS);
 }
 
+static uint32_t sample_age_ms(uint32_t now_ms, const mq_sensor_sample_t *sample)
+{
+    if (sample == NULL || sample->updated_at_ms == 0U || now_ms < sample->updated_at_ms) {
+        return UINT32_MAX;
+    }
+    return now_ms - sample->updated_at_ms;
+}
+
 static bool aq_is_running(void)
 {
     bool running = false;
@@ -137,6 +145,12 @@ static void aq_sample_once(void)
     matter_air_quality_diagnostics_t diagnostics;
     init_diagnostics_defaults(&diagnostics);
 
+    mq_sensor_config_t sensor_configs[MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT];
+    mq_sensor_sample_t sensor_samples[MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT];
+    bool sensor_present[MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT] = {false};
+    memset(sensor_configs, 0, sizeof(sensor_configs));
+    memset(sensor_samples, 0, sizeof(sensor_samples));
+
     mq_sensor_sample_t sample;
     memset(&sample, 0, sizeof(sample));
     sample.id = config.primary_sensor_id;
@@ -162,10 +176,9 @@ static void aq_sample_once(void)
         sensor_sample.vrl_mv = -1;
         const esp_err_t sensor_err = mq_sensor_read(sensor_config.id, &sensor_sample);
         if (sensor_config.id < MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT) {
-            fill_sensor_diagnostics(&diagnostics.sensors[sensor_config.id],
-                                    &sensor_config,
-                                    &sensor_sample,
-                                    0);
+            sensor_configs[sensor_config.id] = sensor_config;
+            sensor_samples[sensor_config.id] = sensor_sample;
+            sensor_present[sensor_config.id] = true;
         }
         if (sensor_config.id == config.primary_sensor_id) {
             sample = sensor_sample;
@@ -174,7 +187,7 @@ static void aq_sample_once(void)
     }
 
     matter_air_quality_level_t next_level = MATTER_AIR_QUALITY_UNKNOWN;
-    bool should_publish = false;
+    bool should_schedule_air_quality = false;
 
     if (aq_lock() != ESP_OK) {
         return;
@@ -185,7 +198,7 @@ static void aq_sample_once(void)
     if (read_err == ESP_OK && sample.state == MQ_SENSOR_STATE_READY) {
         ++s_status.successful_reads;
         s_status.last_success_ms = now_ms;
-        s_status.last_sample_age_ms = 0;
+        s_status.last_sample_age_ms = sample_age_ms(now_ms, &sample);
         if (!s_have_filtered_ratio) {
             s_status.filtered_ratio = sample.rs_ratio;
             s_have_filtered_ratio = true;
@@ -203,7 +216,7 @@ static void aq_sample_once(void)
         if (s_status.last_success_ms != 0) {
             s_status.last_sample_age_ms = now_ms - s_status.last_success_ms;
         } else {
-            s_status.last_sample_age_ms = 0;
+            s_status.last_sample_age_ms = sample_age_ms(now_ms, &sample);
         }
         s_have_filtered_ratio = false;
         s_status.filtered_ratio = 0.0f;
@@ -217,11 +230,24 @@ static void aq_sample_once(void)
         s_have_filtered_ratio = false;
         s_status.filtered_ratio = 0.0f;
     }
+    if (config.primary_sensor_id < MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT && sensor_present[config.primary_sensor_id]) {
+        sensor_samples[config.primary_sensor_id] = sample;
+    }
 
     s_status.last_sample = sample;
     s_status.current_level = next_level;
-    should_publish = config.publish_to_matter && next_level != s_status.last_published_level;
+    should_schedule_air_quality = config.publish_to_matter;
     aq_unlock();
+
+    for (uint8_t i = 0; i < MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT; ++i) {
+        if (!sensor_present[i]) {
+            continue;
+        }
+        fill_sensor_diagnostics(&diagnostics.sensors[i],
+                                &sensor_configs[i],
+                                &sensor_samples[i],
+                                sample_age_ms(now_ms, &sensor_samples[i]));
+    }
 
     if (config.publish_to_matter) {
         const esp_err_t diagnostics_err = matter_update_air_quality_diagnostics(config.matter_endpoint_id,
@@ -231,7 +257,7 @@ static void aq_sample_once(void)
         }
     }
 
-    if (!should_publish) {
+    if (!should_schedule_air_quality) {
         return;
     }
 
@@ -240,14 +266,14 @@ static void aq_sample_once(void)
         return;
     }
     if (matter_err == ESP_OK) {
-        s_status.last_published_level = next_level;
-        ++s_status.matter_updates;
+        s_status.last_scheduled_level = next_level;
+        ++s_status.matter_update_schedules;
         s_status.last_error = read_err;
-        ESP_LOGI(TAG, "Published Air Quality level %s",
+        ESP_LOGI(TAG, "Scheduled Air Quality level %s",
                  air_quality_service_level_to_string(next_level));
     } else {
         s_status.last_error = matter_err;
-        ESP_LOGE(TAG, "failed to publish Air Quality level %s: %s",
+        ESP_LOGE(TAG, "failed to schedule Air Quality level %s: %s",
                  air_quality_service_level_to_string(next_level), esp_err_to_name(matter_err));
     }
     aq_unlock();
@@ -309,7 +335,7 @@ esp_err_t air_quality_service_init(const air_quality_service_config_t *config)
     s_status.matter_endpoint_id = config->matter_endpoint_id;
     s_status.primary_sensor_id = config->primary_sensor_id;
     s_status.current_level = MATTER_AIR_QUALITY_UNKNOWN;
-    s_status.last_published_level = MATTER_AIR_QUALITY_UNKNOWN;
+    s_status.last_scheduled_level = MATTER_AIR_QUALITY_UNKNOWN;
     s_status.last_sample.id = config->primary_sensor_id;
     s_status.last_sample.state = MQ_SENSOR_STATE_STALE;
     s_status.last_error = ESP_OK;

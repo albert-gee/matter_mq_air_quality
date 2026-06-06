@@ -16,7 +16,7 @@ This project targets one fixed hardware design:
 - MQ modules may be powered from 5 V, with shared GND.
 - D0 outputs are ignored.
 
-The firmware does not expose ppm, certified smoke detection, certified CO detection, gas-leak alarms, or safety-alarm behavior. MQ-7 and MQ-9 are analog diagnostics only in this design.
+The firmware reports qualitative baseline-ratio diagnostics only. It reports no ppm values and must not be used as a life-safety device. MQ-7 and MQ-9 are analog diagnostics only in this design.
 
 ```bash
 get_idf
@@ -78,6 +78,8 @@ Default warm-up/aging times are 48 h for MQ-135, MQ-2, MQ-4, MQ-6, MQ-7, MQ-8, a
 6. Wait for warm-up/aging to complete.
 7. Baseline MQ-135:
    `mq calibrate-baseline 0`
+   To baseline every supported sensor after the full warm-up period:
+   `mq calibrate-baseline all`
 8. Check readings:
    `mq read 0`
    `mq aq-status`

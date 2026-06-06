@@ -579,8 +579,9 @@ static void validate_config(void)
                    (unsigned)sensor.id, (unsigned)source.source_id);
             ++errors;
         }
-        if (mq_calibration_nvs_load(sensor.id, &record) != ESP_OK ||
-            !baseline_record_matches_sensor(&record, &sensor, &source)) {
+        if (sensor.supports_baseline_calibration &&
+            (mq_calibration_nvs_load(sensor.id, &record) != ESP_OK ||
+             !baseline_record_matches_sensor(&record, &sensor, &source))) {
             printf("warning sensor %u has no matching baseline\n", (unsigned)sensor.id);
             ++warnings;
         }
@@ -716,6 +717,10 @@ static void calibrate_baseline_command(int argc, char **argv, bool alias)
         for (size_t i = 0; i < board_config_mq_sensor_count(); ++i) {
             mq_sensor_config_t sensor = {0};
             if (board_config_get_effective_sensor_config_by_index(i, &sensor) == ESP_OK) {
+                if (!sensor.supports_baseline_calibration) {
+                    printf("baseline id=%u skipped=diagnostic-only\n", (unsigned)sensor.id);
+                    continue;
+                }
                 calibrate_one(sensor.id, samples, delay_ms);
             }
         }
@@ -833,15 +838,15 @@ static void print_aq_status(void)
         return;
     }
 
-    printf("running=%s endpoint=%u primary_sensor_id = %u level=%s last_published=%s "
+    printf("running=%s endpoint=%u primary_sensor_id = %u level=%s last_scheduled=%s "
            "filtered_ratio=%.3f last_success_ms=%u last_sample_age_ms=%u "
            "raw=%d adc_mv=%d vrl_mv=%d baseline_vrl_mv=%d rs_norm_milli=%ld rs_ratio_milli=%ld "
-           "ok_reads=%u fail_reads=%u matter_updates=%u last_error=%s\n",
+           "ok_reads=%u fail_reads=%u matter_update_schedules=%u last_error=%s\n",
            status.running ? "true" : "false",
            (unsigned)status.matter_endpoint_id,
            (unsigned)status.primary_sensor_id,
            air_quality_service_level_to_string(status.current_level),
-           air_quality_service_level_to_string(status.last_published_level),
+           air_quality_service_level_to_string(status.last_scheduled_level),
            (double)status.filtered_ratio,
            (unsigned)status.last_success_ms,
            (unsigned)status.last_sample_age_ms,
@@ -853,7 +858,7 @@ static void print_aq_status(void)
            (long)(status.last_sample.rs_ratio * 1000.0f + 0.5f),
            (unsigned)status.successful_reads,
            (unsigned)status.failed_reads,
-           (unsigned)status.matter_updates,
+           (unsigned)status.matter_update_schedules,
            esp_err_to_name(status.last_error));
 }
 

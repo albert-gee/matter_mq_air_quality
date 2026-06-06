@@ -58,11 +58,22 @@ static esp_err_t mq_sensor_lock(void)
     return ESP_OK;
 }
 
+static uint32_t mq_sensor_now_ms(void)
+{
+    return (uint32_t)((uint64_t)xTaskGetTickCount() * (uint64_t)portTICK_PERIOD_MS);
+}
+
 static void mq_sensor_unlock(void)
 {
     if (s_lock != NULL) {
         xSemaphoreGiveRecursive(s_lock);
     }
+}
+
+static void store_sample(size_t index, mq_sensor_sample_t *sample)
+{
+    sample->updated_at_ms = mq_sensor_now_ms();
+    s_last_samples[index] = *sample;
 }
 
 static bool float_close(float a, float b)
@@ -89,6 +100,7 @@ static void clear_calibration(size_t index)
     if (s_last_samples[index].state == MQ_SENSOR_STATE_READY) {
         s_last_samples[index].state = MQ_SENSOR_STATE_UNCALIBRATED;
     }
+    s_last_samples[index].updated_at_ms = mq_sensor_now_ms();
 }
 
 static void reset_sample(size_t index)
@@ -99,6 +111,7 @@ static void reset_sample(size_t index)
     s_last_samples[index].raw_adc = -1;
     s_last_samples[index].adc_mv = -1;
     s_last_samples[index].vrl_mv = -1;
+    s_last_samples[index].updated_at_ms = mq_sensor_now_ms();
 }
 
 static bool is_still_warming(size_t index)
@@ -331,7 +344,7 @@ esp_err_t mq_sensor_read(uint8_t id, mq_sensor_sample_t *out)
     sample.threshold_state = MQ_SENSOR_THRESHOLD_NONE;
     if (!s_configs[index].enabled) {
         sample.state = MQ_SENSOR_STATE_DISABLED;
-        s_last_samples[index] = sample;
+        store_sample((size_t)index, &sample);
         *out = sample;
         mq_sensor_unlock();
         return ESP_ERR_INVALID_STATE;
@@ -343,25 +356,10 @@ esp_err_t mq_sensor_read(uint8_t id, mq_sensor_sample_t *out)
         sample.fault_bitmap |= source_err == ESP_ERR_NOT_FOUND ? MQ_SENSOR_FAULT_SOURCE_MISSING
                                                                : MQ_SENSOR_FAULT_DIVIDER_UNCONFIGURED;
         sample.state = MQ_SENSOR_STATE_FAULT;
-        s_last_samples[index] = sample;
+        store_sample((size_t)index, &sample);
         *out = sample;
         mq_sensor_unlock();
         return source_err;
-    }
-
-    if (is_still_warming((size_t)index)) {
-        sample.state = MQ_SENSOR_STATE_WARMING;
-        sample.raw_adc = -1;
-        sample.adc_mv = -1;
-        sample.vrl_mv = -1;
-        sample.rs_norm = 0.0f;
-        sample.baseline_vrl_mv = s_calibrations[index].valid ? (int)s_calibrations[index].baseline_vrl_mv : 0;
-        sample.baseline_rs_norm = s_calibrations[index].valid ? s_calibrations[index].baseline_rs_norm : 0.0f;
-        sample.rs_ratio = 0.0f;
-        s_last_samples[index] = sample;
-        *out = sample;
-        mq_sensor_unlock();
-        return ESP_OK;
     }
 
     int raw = 0;
@@ -370,7 +368,7 @@ esp_err_t mq_sensor_read(uint8_t id, mq_sensor_sample_t *out)
     if (err != ESP_OK) {
         sample.fault_bitmap |= MQ_SENSOR_FAULT_ADC_READ;
         sample.state = MQ_SENSOR_STATE_FAULT;
-        s_last_samples[index] = sample;
+        store_sample((size_t)index, &sample);
         *out = sample;
         mq_sensor_unlock();
         return err;
@@ -383,7 +381,7 @@ esp_err_t mq_sensor_read(uint8_t id, mq_sensor_sample_t *out)
     if (err != ESP_OK) {
         sample.fault_bitmap |= MQ_SENSOR_FAULT_DIVIDER_UNCONFIGURED;
         sample.state = MQ_SENSOR_STATE_FAULT;
-        s_last_samples[index] = sample;
+        store_sample((size_t)index, &sample);
         *out = sample;
         mq_sensor_unlock();
         return err;
@@ -394,20 +392,22 @@ esp_err_t mq_sensor_read(uint8_t id, mq_sensor_sample_t *out)
         sample.fault_bitmap |= MQ_SENSOR_FAULT_INVALID_VRL;
         sample.rs_ratio = 0.0f;
         sample.state = MQ_SENSOR_STATE_FAULT;
-        s_last_samples[index] = sample;
+        store_sample((size_t)index, &sample);
         *out = sample;
         mq_sensor_unlock();
         return err;
     }
 
-    if (!s_configs[index].supports_baseline_calibration) {
-        sample.baseline_vrl_mv = s_calibrations[index].valid ? (int)s_calibrations[index].baseline_vrl_mv : 0;
-        sample.baseline_rs_norm = s_calibrations[index].valid ? s_calibrations[index].baseline_rs_norm : 0.0f;
+    sample.baseline_vrl_mv = s_calibrations[index].valid ? (int)s_calibrations[index].baseline_vrl_mv : 0;
+    sample.baseline_rs_norm = s_calibrations[index].valid ? s_calibrations[index].baseline_rs_norm : 0.0f;
+    sample.rs_ratio = 0.0f;
+
+    if (is_still_warming((size_t)index)) {
+        sample.state = MQ_SENSOR_STATE_WARMING;
+    } else if (!s_configs[index].supports_baseline_calibration) {
         sample.rs_ratio = 0.0f;
         sample.state = MQ_SENSOR_STATE_DIAGNOSTIC_ONLY;
     } else if (!calibration_matches_config((size_t)index, &source)) {
-        sample.baseline_vrl_mv = s_calibrations[index].valid ? (int)s_calibrations[index].baseline_vrl_mv : 0;
-        sample.baseline_rs_norm = s_calibrations[index].valid ? s_calibrations[index].baseline_rs_norm : 0.0f;
         sample.rs_ratio = 0.0f;
         sample.fault_bitmap |= s_calibrations[index].valid ? MQ_SENSOR_FAULT_CALIBRATION_MISMATCH
                                                            : MQ_SENSOR_FAULT_NONE;
@@ -420,7 +420,7 @@ esp_err_t mq_sensor_read(uint8_t id, mq_sensor_sample_t *out)
     }
     sample.threshold_state = threshold_state_for_sample(&s_configs[index], &sample);
 
-    s_last_samples[index] = sample;
+    store_sample((size_t)index, &sample);
     *out = sample;
     mq_sensor_unlock();
     return ESP_OK;

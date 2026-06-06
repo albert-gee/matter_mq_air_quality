@@ -76,6 +76,7 @@ typedef struct {
     float rs_ratio;
     mq_sensor_threshold_state_t threshold_state;
     uint32_t fault_bitmap;
+    uint32_t updated_at_ms;
 } mq_sensor_sample_t;
 
 esp_err_t mq_sensor_init(const mq_sensor_config_t *configs, size_t count);

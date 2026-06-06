@@ -26,14 +26,14 @@ typedef struct {
     uint16_t matter_endpoint_id;
     uint8_t primary_sensor_id;
     matter_air_quality_level_t current_level;
-    matter_air_quality_level_t last_published_level;
+    matter_air_quality_level_t last_scheduled_level;
     mq_sensor_sample_t last_sample;
     float filtered_ratio;
     uint32_t last_success_ms;
     uint32_t last_sample_age_ms;
     uint32_t successful_reads;
     uint32_t failed_reads;
-    uint32_t matter_updates;
+    uint32_t matter_update_schedules;
     esp_err_t last_error;
 } air_quality_service_status_t;
 
