@@ -1,0 +1,39 @@
+# Default to 115200 baud when monitoring the MQ air quality device
+CONFIG_ESPTOOLPY_MONITOR_BAUD=115200
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Enable BLE commissioning support used by Matter
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# Disable BLE connection reattempt
+CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT=n
+
+# Enable lwIP IPv6 autoconfig unless target defaults override it for Thread
+CONFIG_LWIP_IPV6_AUTOCONFIG=y
+
+# Use a custom partition table with NVS/factory/OTA space for Matter and MQ calibration records
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0xC000
+
+# Enable CHIP shell for development console commands
+CONFIG_ENABLE_CHIP_SHELL=y
+
+# Enable lwIP route hooks
+CONFIG_LWIP_HOOK_IP6_ROUTE_DEFAULT=y
+CONFIG_LWIP_HOOK_ND6_GET_GW_DEFAULT=y
+
+# Disable SoftAP by default
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+
+# Disable DS peripheral
+CONFIG_ESP_SECURE_CERT_DS_PERIPHERAL=n
+
+# Enable HKDF in mbedtls
+CONFIG_MBEDTLS_HKDF_C=y
+
+# Increase LwIP IPv6 address count for Matter fabrics and link-local addresses
+CONFIG_LWIP_IPV6_NUM_ADDRESSES=6
+
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
