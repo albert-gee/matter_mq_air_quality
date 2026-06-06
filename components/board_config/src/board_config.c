@@ -13,6 +13,9 @@
 #include "mq_runtime_config.h"
 
 #define BOARD_CONFIG_ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
+#define BOARD_CONFIG_WARMUP_24H_SECONDS 86400U
+#define BOARD_CONFIG_WARMUP_48H_SECONDS 172800U
+#define BOARD_CONFIG_KIT_DIVIDER_RATIO 2.0f
 
 static const char *TAG = "board_config";
 
@@ -26,20 +29,16 @@ typedef struct {
 
 static const board_adc_channel_t k_adc_channels[] = {
     {0, ADC_UNIT_1, ADC_CHANNEL_0, ADC_ATTEN_DB_12, ADC_BITWIDTH_DEFAULT},
-    {1, ADC_UNIT_1, ADC_CHANNEL_1, ADC_ATTEN_DB_12, ADC_BITWIDTH_DEFAULT},
-    {2, ADC_UNIT_1, ADC_CHANNEL_2, ADC_ATTEN_DB_12, ADC_BITWIDTH_DEFAULT},
-    {3, ADC_UNIT_1, ADC_CHANNEL_3, ADC_ATTEN_DB_12, ADC_BITWIDTH_DEFAULT},
-    {4, ADC_UNIT_1, ADC_CHANNEL_4, ADC_ATTEN_DB_12, ADC_BITWIDTH_DEFAULT},
 };
 
 static const analog_mux_config_t k_mux0_default = {
     .mux_id = 0,
-    .enabled = false,
+    .enabled = true,
     .signal_adc_logical_channel = 0,
-    .gpio_s0 = ANALOG_MUX_GPIO_UNUSED,
-    .gpio_s1 = ANALOG_MUX_GPIO_UNUSED,
-    .gpio_s2 = ANALOG_MUX_GPIO_UNUSED,
-    .gpio_s3 = ANALOG_MUX_GPIO_UNUSED,
+    .gpio_s0 = 10,
+    .gpio_s1 = 11,
+    .gpio_s2 = 12,
+    .gpio_s3 = 22,
     .gpio_en = ANALOG_MUX_GPIO_UNUSED,
     .en_active_low = true,
     .settle_time_us = 500,
@@ -47,38 +46,30 @@ static const analog_mux_config_t k_mux0_default = {
 
 static analog_mux_config_t s_effective_mux0;
 
-/* TODO: Set the real resistor-divider correction after MQ module A0 voltage scaling is verified. */
 static const analog_source_config_t k_analog_sources[] = {
-    /* Direct ADC sources kept for current hardware bring-up. */
-    {0, ANALOG_BACKEND_INTERNAL_ADC, 0, 1.0f, 0, 0},
-    {1, ANALOG_BACKEND_INTERNAL_ADC, 1, 1.0f, 0, 0},
-    {2, ANALOG_BACKEND_INTERNAL_ADC, 2, 1.0f, 0, 0},
-    {3, ANALOG_BACKEND_INTERNAL_ADC, 3, 1.0f, 0, 0},
-    {4, ANALOG_BACKEND_INTERNAL_ADC, 4, 1.0f, 0, 0},
-
-    /* Mux-backed sources for future full-kit wiring. */
-    {5, ANALOG_BACKEND_MUX_ADC, 0, 1.0f, 0, 5},
-    {6, ANALOG_BACKEND_MUX_ADC, 0, 1.0f, 0, 6},
-    {7, ANALOG_BACKEND_MUX_ADC, 0, 1.0f, 0, 7},
-    {8, ANALOG_BACKEND_MUX_ADC, 0, 1.0f, 0, 8},
+    {0, ANALOG_BACKEND_MUX_ADC, 0, BOARD_CONFIG_KIT_DIVIDER_RATIO, 0, 0},
+    {1, ANALOG_BACKEND_MUX_ADC, 0, BOARD_CONFIG_KIT_DIVIDER_RATIO, 0, 1},
+    {2, ANALOG_BACKEND_MUX_ADC, 0, BOARD_CONFIG_KIT_DIVIDER_RATIO, 0, 2},
+    {3, ANALOG_BACKEND_MUX_ADC, 0, BOARD_CONFIG_KIT_DIVIDER_RATIO, 0, 3},
+    {4, ANALOG_BACKEND_MUX_ADC, 0, BOARD_CONFIG_KIT_DIVIDER_RATIO, 0, 4},
+    {5, ANALOG_BACKEND_MUX_ADC, 0, BOARD_CONFIG_KIT_DIVIDER_RATIO, 0, 5},
+    {6, ANALOG_BACKEND_MUX_ADC, 0, BOARD_CONFIG_KIT_DIVIDER_RATIO, 0, 6},
+    {7, ANALOG_BACKEND_MUX_ADC, 0, BOARD_CONFIG_KIT_DIVIDER_RATIO, 0, 7},
+    {8, ANALOG_BACKEND_MUX_ADC, 0, BOARD_CONFIG_KIT_DIVIDER_RATIO, 0, 8},
 };
 
 static analog_source_config_t s_effective_sources[BOARD_CONFIG_ARRAY_SIZE(k_analog_sources)];
 
-/*
- * Software bring-up enables only MQ-2 and uses warmup_seconds=0. Production
- * firmware should enforce datasheet preheat/aging before calibration or interpretation.
- */
 static const mq_sensor_config_t k_mq_sensors[] = {
-    {0, MQ_SENSOR_MQ2,   "MQ-2",   0, 5000, 10000,  0, true,  1.0f, true},
-    {1, MQ_SENSOR_MQ3,   "MQ-3",   1, 5000, 200000, 0, false, 0.0f, false},
-    {2, MQ_SENSOR_MQ4,   "MQ-4",   2, 5000, 10000,  0, false, 1.0f, true},
-    {3, MQ_SENSOR_MQ5,   "MQ-5",   3, 5000, 20000,  0, false, 0.0f, false},
-    {4, MQ_SENSOR_MQ6,   "MQ-6",   4, 5000, 10000,  0, false, 1.0f, true},
-    {5, MQ_SENSOR_MQ7,   "MQ-7",   5, 5000, 10000,  0, false, 0.0f, false},
-    {6, MQ_SENSOR_MQ8,   "MQ-8",   6, 5000, 10000,  0, false, 1.0f, true},
-    {7, MQ_SENSOR_MQ9,   "MQ-9",   7, 5000, 10000,  0, false, 0.0f, false},
-    {8, MQ_SENSOR_MQ135, "MQ-135", 8, 5000, 10000,  0, false, 1.0f, true},
+    {0, MQ_SENSOR_MQ135, "MQ-135", 0, 5000, BOARD_CONFIG_WARMUP_48H_SECONDS, true, true,  0.70f, 0.50f},
+    {1, MQ_SENSOR_MQ2,   "MQ-2",   1, 5000, BOARD_CONFIG_WARMUP_48H_SECONDS, true, true,  0.70f, 0.50f},
+    {2, MQ_SENSOR_MQ3,   "MQ-3",   2, 5000, BOARD_CONFIG_WARMUP_24H_SECONDS, true, true,  0.70f, 0.50f},
+    {3, MQ_SENSOR_MQ4,   "MQ-4",   3, 5000, BOARD_CONFIG_WARMUP_48H_SECONDS, true, true,  0.70f, 0.50f},
+    {4, MQ_SENSOR_MQ5,   "MQ-5",   4, 5000, BOARD_CONFIG_WARMUP_24H_SECONDS, true, true,  0.70f, 0.50f},
+    {5, MQ_SENSOR_MQ6,   "MQ-6",   5, 5000, BOARD_CONFIG_WARMUP_48H_SECONDS, true, true,  0.70f, 0.50f},
+    {6, MQ_SENSOR_MQ7,   "MQ-7",   6, 5000, BOARD_CONFIG_WARMUP_48H_SECONDS, true, false, 0.0f,  0.0f},
+    {7, MQ_SENSOR_MQ8,   "MQ-8",   7, 5000, BOARD_CONFIG_WARMUP_48H_SECONDS, true, true,  0.70f, 0.50f},
+    {8, MQ_SENSOR_MQ9,   "MQ-9",   8, 5000, BOARD_CONFIG_WARMUP_48H_SECONDS, true, false, 0.0f,  0.0f},
 };
 
 static mq_sensor_config_t s_effective_sensors[BOARD_CONFIG_ARRAY_SIZE(k_mq_sensors)];
@@ -214,8 +205,8 @@ bool board_config_sensor_can_be_enabled(uint8_t sensor_id)
             const uint8_t source_id = s_effective_sensors[i].analog_source_id;
             for (size_t j = 0; j < BOARD_CONFIG_ARRAY_SIZE(s_effective_sources); ++j) {
                 if (s_effective_sources[j].source_id == source_id) {
-                    if (s_effective_sources[j].type == ANALOG_BACKEND_INTERNAL_ADC) {
-                        return sensor_id <= 4;
+                    if (s_effective_sources[j].input_divider_ratio < 0.1f) {
+                        return false;
                     }
                     if (s_effective_sources[j].type == ANALOG_BACKEND_MUX_ADC) {
                         return s_effective_mux0.enabled;

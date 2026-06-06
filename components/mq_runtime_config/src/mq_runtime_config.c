@@ -15,12 +15,14 @@
 #define MQ_RUNTIME_MUX_MAGIC 0x4d514d30U
 #define MQ_RUNTIME_AQ_MAGIC 0x4d514151U
 #define MQ_RUNTIME_CONFIG_VERSION 1U
-#define MQ_RUNTIME_SOURCE_VERSION 2U
+#define MQ_RUNTIME_SENSOR_VERSION 3U
+#define MQ_RUNTIME_SOURCE_VERSION 3U
 #define MQ_RUNTIME_MAX_SENSOR_ID 8U
 #define MQ_RUNTIME_MAX_SOURCE_ID 8U
-#define MQ_RUNTIME_MAX_DIRECT_ADC_ID 4U
+#define MQ_RUNTIME_SIGNAL_ADC_ID 0U
 #define MQ_RUNTIME_MAX_MUX_CHANNEL 15U
 #define MQ_RUNTIME_MUX_ID 0U
+#define MQ_RUNTIME_MAX_WARMUP_SECONDS 172800U
 
 typedef struct {
     uint32_t magic;
@@ -28,10 +30,9 @@ typedef struct {
     uint8_t valid;
     uint8_t enabled;
     uint32_t vc_mv;
-    uint32_t rl_ohms;
     uint32_t warmup_seconds;
-    float clean_air_rs_r0_factor;
-    uint8_t supports_clean_air_calibration;
+    float warning_rs_ratio;
+    float critical_rs_ratio;
 } mq_runtime_sensor_record_t;
 
 typedef struct {
@@ -135,7 +136,7 @@ static bool mux_record_has_duplicate_gpios(const mq_runtime_mux_record_t *record
 static bool is_sensor_record_valid(uint8_t sensor_id, const mq_runtime_sensor_record_t *record)
 {
     if (record == NULL || record->magic != MQ_RUNTIME_SENSOR_MAGIC ||
-        record->version != MQ_RUNTIME_CONFIG_VERSION || record->valid == 0) {
+        record->version != MQ_RUNTIME_SENSOR_VERSION || record->valid == 0) {
         return false;
     }
     if (!is_sensor_id_valid(sensor_id)) {
@@ -144,16 +145,11 @@ static bool is_sensor_record_valid(uint8_t sensor_id, const mq_runtime_sensor_re
     if (record->vc_mv < 1000U || record->vc_mv > 10000U) {
         return false;
     }
-    if (record->rl_ohms < 1000U || record->rl_ohms > 1000000U) {
+    const uint32_t max_warmup = MQ_RUNTIME_MAX_WARMUP_SECONDS;
+    if (record->warmup_seconds > max_warmup) {
         return false;
     }
-    if (record->warmup_seconds > 172800U) {
-        return false;
-    }
-    if (record->clean_air_rs_r0_factor < 0.0f) {
-        return false;
-    }
-    if (record->supports_clean_air_calibration != 0 && record->clean_air_rs_r0_factor <= 0.0f) {
+    if (record->warning_rs_ratio < 0.0f || record->critical_rs_ratio < 0.0f) {
         return false;
     }
     return true;
@@ -171,11 +167,8 @@ static bool is_source_record_valid(uint8_t source_id, const mq_runtime_source_re
     if (record->input_divider_ratio < 0.1f || record->input_divider_ratio > 20.0f) {
         return false;
     }
-    if (record->type == ANALOG_BACKEND_INTERNAL_ADC) {
-        return record->adc_logical_channel <= MQ_RUNTIME_MAX_DIRECT_ADC_ID;
-    }
     if (record->type == ANALOG_BACKEND_MUX_ADC) {
-        return record->adc_logical_channel <= MQ_RUNTIME_MAX_DIRECT_ADC_ID &&
+        return record->adc_logical_channel == MQ_RUNTIME_SIGNAL_ADC_ID &&
                record->mux_id == MQ_RUNTIME_MUX_ID &&
                record->mux_channel <= MQ_RUNTIME_MAX_MUX_CHANNEL;
     }
@@ -191,7 +184,7 @@ static bool is_mux_record_valid(uint8_t mux_id, const mq_runtime_mux_record_t *r
     if (!is_mux_id_valid(mux_id)) {
         return false;
     }
-    if (record->signal_adc_logical_channel > MQ_RUNTIME_MAX_DIRECT_ADC_ID) {
+    if (record->signal_adc_logical_channel != MQ_RUNTIME_SIGNAL_ADC_ID) {
         return false;
     }
     if (record->settle_time_us < 50U || record->settle_time_us > 5000U) {
@@ -223,7 +216,7 @@ static bool is_aq_record_valid(const mq_runtime_aq_record_t *record)
         record->version != MQ_RUNTIME_CONFIG_VERSION || record->valid == 0) {
         return false;
     }
-    if (record->primary_sensor_id > MQ_RUNTIME_MAX_SENSOR_ID) {
+    if (record->primary_sensor_id != 0U) {
         return false;
     }
     if (record->sample_interval_ms < 1000U || record->sample_interval_ms > 60000U) {
@@ -340,10 +333,9 @@ esp_err_t mq_runtime_config_apply_sensor(uint8_t sensor_id,
 
     effective->enabled = record.enabled != 0;
     effective->vc_mv = record.vc_mv;
-    effective->rl_ohms = record.rl_ohms;
     effective->warmup_seconds = record.warmup_seconds;
-    effective->clean_air_rs_r0_factor = record.clean_air_rs_r0_factor;
-    effective->supports_clean_air_calibration = record.supports_clean_air_calibration != 0;
+    effective->warning_rs_ratio = record.warning_rs_ratio;
+    effective->critical_rs_ratio = record.critical_rs_ratio;
     return ESP_OK;
 }
 
@@ -463,27 +455,21 @@ esp_err_t mq_runtime_config_save_sensor(const mq_sensor_config_t *config)
                         "sensor id %u is out of range", (unsigned)config->id);
     ESP_RETURN_ON_FALSE(config->vc_mv >= 1000U && config->vc_mv <= 10000U, ESP_ERR_INVALID_ARG,
                         TAG, "vc_mv must be between 1000 and 10000");
-    ESP_RETURN_ON_FALSE(config->rl_ohms >= 1000U && config->rl_ohms <= 1000000U, ESP_ERR_INVALID_ARG,
-                        TAG, "rl_ohms must be between 1000 and 1000000");
-    ESP_RETURN_ON_FALSE(config->warmup_seconds <= 172800U, ESP_ERR_INVALID_ARG, TAG,
-                        "warmup_seconds must be <= 172800");
-    ESP_RETURN_ON_FALSE(config->clean_air_rs_r0_factor >= 0.0f, ESP_ERR_INVALID_ARG,
-                        TAG, "clean-air factor must not be negative");
-    ESP_RETURN_ON_FALSE(!config->supports_clean_air_calibration ||
-                            config->clean_air_rs_r0_factor > 0.0f,
-                        ESP_ERR_INVALID_ARG, TAG,
-                        "clean-air capable sensors need a positive factor");
+    ESP_RETURN_ON_FALSE(config->warmup_seconds <= MQ_RUNTIME_MAX_WARMUP_SECONDS,
+                        ESP_ERR_INVALID_ARG, TAG, "warm-up seconds exceed maximum");
+    ESP_RETURN_ON_FALSE(config->warning_rs_ratio >= 0.0f &&
+                            config->critical_rs_ratio >= 0.0f,
+                        ESP_ERR_INVALID_ARG, TAG, "threshold ratios must not be negative");
 
     const mq_runtime_sensor_record_t record = {
         .magic = MQ_RUNTIME_SENSOR_MAGIC,
-        .version = MQ_RUNTIME_CONFIG_VERSION,
+        .version = MQ_RUNTIME_SENSOR_VERSION,
         .valid = 1,
         .enabled = config->enabled ? 1 : 0,
         .vc_mv = config->vc_mv,
-        .rl_ohms = config->rl_ohms,
         .warmup_seconds = config->warmup_seconds,
-        .clean_air_rs_r0_factor = config->clean_air_rs_r0_factor,
-        .supports_clean_air_calibration = config->supports_clean_air_calibration ? 1 : 0,
+        .warning_rs_ratio = config->warning_rs_ratio,
+        .critical_rs_ratio = config->critical_rs_ratio,
     };
 
     char key[8];
@@ -496,15 +482,13 @@ esp_err_t mq_runtime_config_save_source(const analog_source_config_t *config)
     ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "source config is required");
     ESP_RETURN_ON_FALSE(is_source_id_valid(config->source_id), ESP_ERR_INVALID_ARG, TAG,
                         "source id %u is out of range", (unsigned)config->source_id);
-    ESP_RETURN_ON_FALSE(config->type == ANALOG_BACKEND_INTERNAL_ADC ||
-                            config->type == ANALOG_BACKEND_MUX_ADC,
+    ESP_RETURN_ON_FALSE(config->type == ANALOG_BACKEND_MUX_ADC,
                         ESP_ERR_NOT_SUPPORTED, TAG,
-                        "only internal ADC and mux ADC source overrides are supported");
-    ESP_RETURN_ON_FALSE(config->adc_logical_channel <= MQ_RUNTIME_MAX_DIRECT_ADC_ID, ESP_ERR_INVALID_ARG,
-                        TAG, "adc_logical_channel must be 0..4");
-    ESP_RETURN_ON_FALSE(config->type != ANALOG_BACKEND_MUX_ADC ||
-                            (config->mux_id == MQ_RUNTIME_MUX_ID &&
-                             config->mux_channel <= MQ_RUNTIME_MAX_MUX_CHANNEL),
+                        "only mux ADC source overrides are supported");
+    ESP_RETURN_ON_FALSE(config->adc_logical_channel == MQ_RUNTIME_SIGNAL_ADC_ID, ESP_ERR_INVALID_ARG,
+                        TAG, "adc_logical_channel must be 0");
+    ESP_RETURN_ON_FALSE(config->mux_id == MQ_RUNTIME_MUX_ID &&
+                            config->mux_channel <= MQ_RUNTIME_MAX_MUX_CHANNEL,
                         ESP_ERR_INVALID_ARG, TAG,
                         "mux sources require mux_id=0 and mux_channel 0..15");
     ESP_RETURN_ON_FALSE(config->input_divider_ratio >= 0.1f &&
@@ -532,8 +516,8 @@ esp_err_t mq_runtime_config_save_mux(const analog_mux_config_t *config)
     ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "mux config is required");
     ESP_RETURN_ON_FALSE(is_mux_id_valid(config->mux_id), ESP_ERR_NOT_SUPPORTED, TAG,
                         "only mux_id 0 is supported for now");
-    ESP_RETURN_ON_FALSE(config->signal_adc_logical_channel <= MQ_RUNTIME_MAX_DIRECT_ADC_ID,
-                        ESP_ERR_INVALID_ARG, TAG, "signal_adc_logical_channel must be 0..4");
+    ESP_RETURN_ON_FALSE(config->signal_adc_logical_channel == MQ_RUNTIME_SIGNAL_ADC_ID,
+                        ESP_ERR_INVALID_ARG, TAG, "signal_adc_logical_channel must be 0");
     ESP_RETURN_ON_FALSE(config->settle_time_us >= 50U && config->settle_time_us <= 5000U,
                         ESP_ERR_INVALID_ARG, TAG, "settle_time_us must be 50..5000");
     ESP_RETURN_ON_FALSE(is_gpio_valid_or_unused(config->gpio_s0) &&
@@ -575,9 +559,9 @@ esp_err_t mq_runtime_config_save_mux(const analog_mux_config_t *config)
 esp_err_t mq_runtime_config_save_air_quality(const air_quality_service_config_t *config)
 {
     ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "AQ config is required");
-    ESP_RETURN_ON_FALSE(config->primary_sensor_id <= MQ_RUNTIME_MAX_SENSOR_ID,
+    ESP_RETURN_ON_FALSE(config->primary_sensor_id == 0U,
                         ESP_ERR_INVALID_ARG, TAG,
-                        "primary sensor id must be 0..8");
+                        "primary sensor id must be 0 (MQ-135)");
     ESP_RETURN_ON_FALSE(config->sample_interval_ms >= 1000U &&
                             config->sample_interval_ms <= 60000U,
                         ESP_ERR_INVALID_ARG, TAG, "sample_interval_ms must be 1000..60000");

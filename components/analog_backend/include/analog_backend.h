@@ -9,10 +9,11 @@
 extern "C" {
 #endif
 
+#define ANALOG_BACKEND_DIVIDER_UNCONFIGURED 0.0f
+
 typedef enum {
     ANALOG_BACKEND_INTERNAL_ADC = 0,
-    ANALOG_BACKEND_EXTERNAL_ADC = 1,
-    ANALOG_BACKEND_MUX_ADC = 2,
+    ANALOG_BACKEND_MUX_ADC = 1,
 } analog_backend_type_t;
 
 typedef struct {
@@ -27,11 +28,13 @@ typedef struct {
 
 esp_err_t analog_backend_init(void);
 esp_err_t analog_backend_register_source(const analog_source_config_t *config);
+/* Returns ADC-pin millivolts. Divider correction is applied by mq_sensor. */
 esp_err_t analog_backend_read_mv(uint8_t source_id, int *raw, int *mv);
 esp_err_t analog_backend_select_mux_channel(uint8_t mux_id, uint8_t mux_channel);
 esp_err_t analog_backend_read_mux_channel_mv(uint8_t mux_id, uint8_t mux_channel, int *raw, int *mv);
 esp_err_t analog_backend_get_source_config(uint8_t source_id, analog_source_config_t *out);
 bool analog_backend_source_is_registered(uint8_t source_id);
+bool analog_backend_source_has_configured_divider(uint8_t source_id);
 
 #ifdef __cplusplus
 }

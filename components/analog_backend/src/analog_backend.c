@@ -61,10 +61,14 @@ esp_err_t analog_backend_register_source(const analog_source_config_t *config)
     ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "source config is required");
     ESP_RETURN_ON_FALSE(config->source_id < ANALOG_BACKEND_MAX_SOURCES, ESP_ERR_INVALID_ARG, TAG,
                         "source id %u is out of range", (unsigned)config->source_id);
-    ESP_RETURN_ON_FALSE(config->type <= ANALOG_BACKEND_MUX_ADC, ESP_ERR_INVALID_ARG, TAG,
+    ESP_RETURN_ON_FALSE(config->type == ANALOG_BACKEND_INTERNAL_ADC ||
+                            config->type == ANALOG_BACKEND_MUX_ADC,
+                        ESP_ERR_INVALID_ARG, TAG,
                         "unsupported analog backend type %d", (int)config->type);
-    ESP_RETURN_ON_FALSE(config->input_divider_ratio > 0.0f, ESP_ERR_INVALID_ARG, TAG,
-                        "input divider ratio must be positive");
+    ESP_RETURN_ON_FALSE(config->input_divider_ratio >= ANALOG_BACKEND_DIVIDER_UNCONFIGURED &&
+                            config->input_divider_ratio <= 20.0f,
+                        ESP_ERR_INVALID_ARG, TAG,
+                        "input divider ratio must be unconfigured or 0.1..20.0");
 
     ESP_RETURN_ON_ERROR(lock_backend(), TAG, "failed to lock analog backend for source registration");
     s_sources[config->source_id].config = *config;
@@ -94,6 +98,10 @@ esp_err_t analog_backend_read_mv(uint8_t source_id, int *raw, int *mv)
         ESP_LOGE(TAG, "analog source %u is not registered", (unsigned)source_id);
         goto out;
     }
+    if (config->input_divider_ratio < 0.1f) {
+        err = ESP_ERR_INVALID_STATE;
+        goto out;
+    }
 
     switch (config->type) {
     case ANALOG_BACKEND_INTERNAL_ADC: {
@@ -101,7 +109,7 @@ esp_err_t analog_backend_read_mv(uint8_t source_id, int *raw, int *mv)
         if (err != ESP_OK) {
             goto out;
         }
-        *mv = (int)((float)adc_mv * config->input_divider_ratio + 0.5f);
+        *mv = adc_mv;
         break;
     }
     case ANALOG_BACKEND_MUX_ADC: {
@@ -117,18 +125,15 @@ esp_err_t analog_backend_read_mv(uint8_t source_id, int *raw, int *mv)
                      esp_err_to_name(err));
             goto out;
         }
+        int discard_raw = 0;
+        (void)adc_service_read_raw(mux_config.signal_adc_logical_channel, &discard_raw);
         err = adc_service_read_mv(mux_config.signal_adc_logical_channel, raw, &adc_mv);
         if (err != ESP_OK) {
             goto out;
         }
-        *mv = (int)((float)adc_mv * config->input_divider_ratio + 0.5f);
+        *mv = adc_mv;
         break;
     }
-    case ANALOG_BACKEND_EXTERNAL_ADC:
-        /* TODO: add external ADC driver integration. */
-        ESP_LOGW(TAG, "external ADC backend is not implemented yet");
-        err = ESP_ERR_NOT_SUPPORTED;
-        break;
     default:
         err = ESP_ERR_INVALID_STATE;
         break;
@@ -156,6 +161,8 @@ esp_err_t analog_backend_read_mux_channel_mv(uint8_t mux_id, uint8_t mux_channel
     if (err != ESP_OK) {
         goto out;
     }
+    int discard_raw = 0;
+    (void)adc_service_read_raw(mux_config.signal_adc_logical_channel, &discard_raw);
     err = adc_service_read_mv(mux_config.signal_adc_logical_channel, raw, mv);
 
 out:
@@ -200,4 +207,16 @@ bool analog_backend_source_is_registered(uint8_t source_id)
     const bool registered = s_sources[source_id].registered;
     unlock_backend();
     return registered;
+}
+
+bool analog_backend_source_has_configured_divider(uint8_t source_id)
+{
+    if (!s_initialized || source_id >= ANALOG_BACKEND_MAX_SOURCES || lock_backend() != ESP_OK) {
+        return false;
+    }
+
+    const bool configured = s_sources[source_id].registered &&
+                            s_sources[source_id].config.input_divider_ratio >= 0.1f;
+    unlock_backend();
+    return configured;
 }

@@ -59,6 +59,10 @@ static bool app_get_source_config(uint8_t source_id, analog_source_config_t *out
         analog_source_config_t source = {};
         if (board_config_get_effective_source_config_by_index(i, &source) == ESP_OK &&
             source.source_id == source_id) {
+            if (source.input_divider_ratio < 0.1f) {
+                ESP_LOGW(TAG, "Analog source %u has no configured divider; reads are blocked until configured",
+                         static_cast<unsigned>(source.source_id));
+            }
             if (out != nullptr) {
                 *out = source;
             }
@@ -101,6 +105,9 @@ static void log_sensor_boot_warnings()
         if (source.type == ANALOG_BACKEND_MUX_ADC && !board_config_mux_is_enabled(source.mux_id)) {
             ESP_LOGW(TAG, "Analog source %u uses mux %u while mux is disabled",
                      static_cast<unsigned>(source.source_id), static_cast<unsigned>(source.mux_id));
+        } else if (source.type != ANALOG_BACKEND_MUX_ADC) {
+            ESP_LOGW(TAG, "Analog source %u is not mux-backed; enabled sensor reads will fail validation",
+                     static_cast<unsigned>(source.source_id));
         }
     }
 
@@ -129,23 +136,18 @@ static void log_sensor_boot_warnings()
             }
         }
 
-        if (sensor.type == MQ_SENSOR_MQ7 || sensor.type == MQ_SENSOR_MQ9) {
-            ESP_LOGW(TAG, "%s is raw-diagnostic only in this firmware; do not use it for calibrated AQ/Matter",
-                     mq_sensor_type_to_string(sensor.type));
-        }
-
         mq_calibration_record_t calibration = {};
         const esp_err_t cal_err = mq_calibration_nvs_load(sensor.id, &calibration);
-        if (cal_err != ESP_OK || !calibration.valid || calibration.r0_ohms <= 0.0f) {
-            ESP_LOGW(TAG, "Enabled sensor %u has no valid calibration", static_cast<unsigned>(sensor.id));
+        if (cal_err != ESP_OK || !calibration.valid || calibration.baseline_vrl_mv == 0U) {
+            ESP_LOGW(TAG, "Enabled sensor %u has no valid baseline", static_cast<unsigned>(sensor.id));
         }
     }
 }
 
 static void log_aq_boot_warnings(const air_quality_service_config_t &aq_config)
 {
-    if (aq_config.primary_sensor_id > 8) {
-        ESP_LOGW(TAG, "AQ primary sensor %u is outside configured sensor range 0..8",
+    if (aq_config.primary_sensor_id != 0) {
+        ESP_LOGW(TAG, "AQ primary sensor %u is not the required MQ-135 sensor 0",
                  static_cast<unsigned>(aq_config.primary_sensor_id));
     }
 
@@ -156,6 +158,9 @@ static void log_aq_boot_warnings(const air_quality_service_config_t &aq_config)
     }
     if (!primary.enabled) {
         ESP_LOGW(TAG, "AQ primary sensor %u is not enabled", static_cast<unsigned>(aq_config.primary_sensor_id));
+    }
+    if (primary.type != MQ_SENSOR_MQ135) {
+        ESP_LOGW(TAG, "AQ primary sensor %u is not MQ-135", static_cast<unsigned>(aq_config.primary_sensor_id));
     }
 
     analog_source_config_t source = {};
@@ -189,6 +194,7 @@ extern "C" void app_main()
 
     ESP_ERROR_CHECK(mq_calibration_nvs_init());
     ESP_ERROR_CHECK(mq_runtime_config_init());
+    ESP_ERROR_CHECK(mq_sensor_self_check());
     ESP_ERROR_CHECK(adc_service_init());
     ESP_ERROR_CHECK(analog_backend_init());
     ESP_ERROR_CHECK(analog_mux_init());

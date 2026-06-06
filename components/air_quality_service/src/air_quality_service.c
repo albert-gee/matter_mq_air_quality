@@ -57,6 +57,40 @@ static matter_air_quality_level_t map_ratio_to_level(float ratio)
     return MATTER_AIR_QUALITY_EXTREMELY_POOR;
 }
 
+static void fill_diagnostics(uint16_t endpoint_id,
+                             const mq_sensor_sample_t *sample,
+                             uint32_t age_ms,
+                             matter_air_quality_diagnostics_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (sample == NULL) {
+        return;
+    }
+
+    mq_sensor_config_t config;
+    for (size_t i = 0; i < mq_sensor_count(); ++i) {
+        if (mq_sensor_get_config_by_index(i, &config) == ESP_OK && config.id == sample->id) {
+            out->sensor_type = (uint8_t)config.type;
+            out->enabled = config.enabled ? 1 : 0;
+            break;
+        }
+    }
+
+    (void)endpoint_id;
+    out->sensor_id = sample->id;
+    out->state = (uint8_t)sample->state;
+    out->raw_adc = sample->raw_adc;
+    out->adc_mv = sample->adc_mv;
+    out->vrl_mv = sample->vrl_mv;
+    out->baseline_vrl_mv = sample->baseline_vrl_mv;
+    out->rs_norm_milli = (int32_t)(sample->rs_norm * 1000.0f + 0.5f);
+    out->rs_ratio_milli = (int32_t)(sample->rs_ratio * 1000.0f + 0.5f);
+    out->baseline_valid = sample->state == MQ_SENSOR_STATE_READY ? 1 : 0;
+    out->threshold_state = (uint8_t)sample->threshold_state;
+    out->fault_bitmap = sample->fault_bitmap;
+    out->last_update_age_ms = age_ms;
+}
+
 static uint32_t aq_now_ms(void)
 {
     return (uint32_t)((uint64_t)xTaskGetTickCount() * (uint64_t)portTICK_PERIOD_MS);
@@ -97,7 +131,7 @@ static void aq_sample_once(void)
     mq_sensor_sample_t sample;
     memset(&sample, 0, sizeof(sample));
     sample.id = config.primary_sensor_id;
-    sample.state = MQ_SENSOR_STATE_ERROR;
+    sample.state = MQ_SENSOR_STATE_FAULT;
 
     esp_err_t read_err = mq_sensor_read(config.primary_sensor_id, &sample);
     const uint32_t now_ms = aq_now_ms();
@@ -115,10 +149,10 @@ static void aq_sample_once(void)
         s_status.last_success_ms = now_ms;
         s_status.last_sample_age_ms = 0;
         if (!s_have_filtered_ratio) {
-            s_status.filtered_ratio = sample.rs_r0_ratio;
+            s_status.filtered_ratio = sample.rs_ratio;
             s_have_filtered_ratio = true;
         } else {
-            s_status.filtered_ratio = config.ema_alpha * sample.rs_r0_ratio +
+            s_status.filtered_ratio = config.ema_alpha * sample.rs_ratio +
                                       (1.0f - config.ema_alpha) * s_status.filtered_ratio;
         }
         next_level = map_ratio_to_level(s_status.filtered_ratio);
@@ -149,7 +183,16 @@ static void aq_sample_once(void)
     s_status.last_sample = sample;
     s_status.current_level = next_level;
     should_publish = config.publish_to_matter && next_level != s_status.last_published_level;
+    matter_air_quality_diagnostics_t diagnostics;
+    fill_diagnostics(config.matter_endpoint_id, &sample, s_status.last_sample_age_ms, &diagnostics);
     aq_unlock();
+
+    if (config.publish_to_matter) {
+        const esp_err_t diag_err = matter_update_air_quality_diagnostics(config.matter_endpoint_id, &diagnostics);
+        if (diag_err != ESP_OK) {
+            ESP_LOGW(TAG, "failed to publish MQ diagnostics: %s", esp_err_to_name(diag_err));
+        }
+    }
 
     if (!should_publish) {
         return;
@@ -206,6 +249,8 @@ esp_err_t air_quality_service_init(const air_quality_service_config_t *config)
                         "stale_after_ms must be positive");
     ESP_RETURN_ON_FALSE(config->ema_alpha > 0.0f && config->ema_alpha <= 1.0f,
                         ESP_ERR_INVALID_ARG, TAG, "ema_alpha must be in (0, 1]");
+    ESP_RETURN_ON_FALSE(config->primary_sensor_id == 0U,
+                        ESP_ERR_INVALID_ARG, TAG, "Matter Air Quality primary must be sensor 0");
     ESP_RETURN_ON_FALSE(!config->publish_to_matter || config->matter_endpoint_id != 0,
                         ESP_ERR_INVALID_ARG, TAG, "Matter endpoint is required when publishing");
 

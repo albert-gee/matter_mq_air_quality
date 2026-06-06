@@ -16,6 +16,7 @@
 
 #define ADC_SERVICE_MAX_CHANNELS 16
 #define ADC_SERVICE_LOCK_TIMEOUT pdMS_TO_TICKS(1000)
+#define ADC_SERVICE_READ_MV_SAMPLE_COUNT 16
 
 static const char *TAG = "adc_service";
 
@@ -193,23 +194,30 @@ esp_err_t adc_service_read_mv(uint8_t logical_channel, int *raw, int *mv)
         return ESP_ERR_NOT_FOUND;
     }
 
-    int raw_value = 0;
-    esp_err_t err = adc_oneshot_read(s_adc_unit, s_channels[logical_channel].channel, &raw_value);
-    if (err != ESP_OK) {
-        adc_service_unlock();
-        ESP_LOGE(TAG, "ADC raw read failed for logical channel %u: %s", (unsigned)logical_channel,
-                 esp_err_to_name(err));
-        return err;
+    int64_t raw_sum = 0;
+    esp_err_t err = ESP_OK;
+    for (size_t i = 0; i < ADC_SERVICE_READ_MV_SAMPLE_COUNT; ++i) {
+        int raw_value = 0;
+        err = adc_oneshot_read(s_adc_unit, s_channels[logical_channel].channel, &raw_value);
+        if (err != ESP_OK) {
+            adc_service_unlock();
+            ESP_LOGE(TAG, "ADC raw read failed for logical channel %u: %s", (unsigned)logical_channel,
+                     esp_err_to_name(err));
+            return err;
+        }
+        raw_sum += raw_value;
     }
 
-    *raw = raw_value;
+    const int raw_average = (int)((raw_sum + (ADC_SERVICE_READ_MV_SAMPLE_COUNT / 2)) /
+                                  ADC_SERVICE_READ_MV_SAMPLE_COUNT);
+    *raw = raw_average;
     if (s_channels[logical_channel].calibration == NULL) {
         adc_service_unlock();
         return ESP_ERR_NOT_SUPPORTED;
     }
 
     int voltage_mv = 0;
-    err = adc_cali_raw_to_voltage(s_channels[logical_channel].calibration, raw_value, &voltage_mv);
+    err = adc_cali_raw_to_voltage(s_channels[logical_channel].calibration, raw_average, &voltage_mv);
     adc_service_unlock();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ADC calibration conversion failed for logical channel %u: %s",
