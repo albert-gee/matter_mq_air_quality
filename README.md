@@ -117,4 +117,4 @@ mq config-reset all
 
 The standard Matter Air Quality endpoint uses MQ-135 only. If MQ-135 is disabled, warming, uncalibrated, stale, or faulted, Air Quality is `UNKNOWN`.
 
-Manufacturer-specific diagnostics on cluster `0xFC01` expose sensor id/type, enabled state, raw ADC, `adc_mv`, corrected `vrl_mv`, `baseline_vrl_mv`, `rs_norm_milli`, `rs_ratio_milli`, baseline state, threshold state, fault bitmap, and last update age.
+Per-sensor diagnostics stay in the `mq` console commands. The Matter data model exposes only the standard Air Quality value.
