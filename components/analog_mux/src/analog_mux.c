@@ -42,14 +42,14 @@ static void unlock_mux(void)
     }
 }
 
-static bool is_valid_gpio_or_unused(int gpio)
-{
-    return gpio == ANALOG_MUX_GPIO_UNUSED || (gpio >= 0 && gpio < GPIO_NUM_MAX);
-}
-
 static bool is_valid_output_gpio(int gpio)
 {
-    return gpio >= 0 && gpio < GPIO_NUM_MAX;
+    return gpio >= 0 && gpio < GPIO_NUM_MAX && GPIO_IS_VALID_OUTPUT_GPIO(gpio);
+}
+
+static bool is_valid_gpio_or_unused(int gpio)
+{
+    return gpio == ANALOG_MUX_GPIO_UNUSED || is_valid_output_gpio(gpio);
 }
 
 static bool config_has_valid_select_gpios(const analog_mux_config_t *config)

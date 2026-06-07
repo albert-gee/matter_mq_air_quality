@@ -177,7 +177,6 @@ esp_err_t matter_create_air_quality_endpoint(esp_matter::node_t *matter_node, ui
     s_diagnostics_attribute_count = 0;
 
     esp_matter::endpoint::air_quality_sensor::config_t endpoint_config;
-    endpoint_config.air_quality.air_quality = static_cast<uint8_t>(MATTER_AIR_QUALITY_UNKNOWN);
 
     esp_matter::endpoint_t *endpoint = esp_matter::endpoint::air_quality_sensor::create(
         matter_node, &endpoint_config, esp_matter::ENDPOINT_FLAG_NONE, nullptr);

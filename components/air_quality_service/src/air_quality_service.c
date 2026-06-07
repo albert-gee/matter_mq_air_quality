@@ -103,8 +103,11 @@ static uint32_t aq_now_ms(void)
 
 static uint32_t sample_age_ms(uint32_t now_ms, const mq_sensor_sample_t *sample)
 {
-    if (sample == NULL || sample->updated_at_ms == 0U || now_ms < sample->updated_at_ms) {
+    if (sample == NULL || sample->updated_at_ms == 0U) {
         return UINT32_MAX;
+    }
+    if (now_ms < sample->updated_at_ms) {
+        return 0;
     }
     return now_ms - sample->updated_at_ms;
 }
@@ -141,7 +144,6 @@ static void aq_sample_once(void)
     config = s_config;
     aq_unlock();
 
-    const uint32_t now_ms = aq_now_ms();
     matter_air_quality_diagnostics_t diagnostics;
     init_diagnostics_defaults(&diagnostics);
 
@@ -186,6 +188,7 @@ static void aq_sample_once(void)
         }
     }
 
+    const uint32_t now_ms = aq_now_ms();
     matter_air_quality_level_t next_level = MATTER_AIR_QUALITY_UNKNOWN;
     bool should_schedule_air_quality = false;
 

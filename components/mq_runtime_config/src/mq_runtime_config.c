@@ -98,7 +98,8 @@ static bool is_source_id_valid(uint8_t source_id)
 
 static bool is_gpio_valid_or_unused(int32_t gpio)
 {
-    return gpio == ANALOG_MUX_GPIO_UNUSED || (gpio >= 0 && gpio < GPIO_NUM_MAX);
+    return gpio == ANALOG_MUX_GPIO_UNUSED ||
+           (gpio >= 0 && gpio < GPIO_NUM_MAX && GPIO_IS_VALID_OUTPUT_GPIO(gpio));
 }
 
 static bool is_mux_id_valid(uint8_t mux_id)
