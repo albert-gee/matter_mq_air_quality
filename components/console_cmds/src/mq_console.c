@@ -314,8 +314,8 @@ static void print_sample(const mq_sensor_config_t *sensor, const mq_sensor_sampl
            sample->adc_mv,
            sample->vrl_mv,
            sample->baseline_vrl_mv,
-           (long)(sample->rs_norm * 1000.0f + 0.5f),
-           (long)(sample->rs_ratio * 1000.0f + 0.5f),
+           (long)ratio_to_milli_saturated(sample->rs_norm),
+           (long)ratio_to_milli_saturated(sample->rs_ratio),
            threshold_state_to_string(sample->threshold_state),
            (unsigned long)sample->fault_bitmap);
 }

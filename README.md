@@ -1,7 +1,7 @@
 # Matter MQ Air Quality Sensor
 
 Target: ESP32-H2
-Framework: ESP-IDF 5.3 + ESP-Matter 1.4.2
+Framework: ESP-IDF 5.3.2 + ESP-Matter release/v1.4.2
 Sensors: MQ-135, MQ-2, MQ-3, MQ-4, MQ-5, MQ-6, MQ-7, MQ-8, MQ-9
 Status: experimental baseline-ratio firmware for one CD74HC4067 mux kit
 
@@ -133,3 +133,5 @@ sensor 1 SensorType  matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC
 sensor 8 SensorType  matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC01 0xFFF10100
 sensor 8 RsRatio     matter esp attribute get <air_quality_endpoint_id> 0xFFF1FC01 0xFFF10108
 ```
+
+Stopping the service with `mq aq-stop` immediately queues Air Quality `UNKNOWN` and marks every enabled sensor diagnostic `STALE`, independently of worker-task termination. While stopped, `LastUpdateAgeMs` is `4294967295` (`UINT32_MAX`) to mean that a live age is unavailable; it is replaced by a normal age after sampling restarts and produces a new diagnostic update.

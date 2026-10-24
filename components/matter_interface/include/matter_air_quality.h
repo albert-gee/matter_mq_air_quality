@@ -17,6 +17,8 @@ extern "C" {
 #define MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT 9U
 #define MATTER_MQ_DIAGNOSTICS_ATTRS_PER_SENSOR 13U
 #define MATTER_MQ_DIAGNOSTICS_GLOBAL_ATTR_COUNT 2U
+/* Sampling is stopped, so a continuously increasing age is unavailable. */
+#define MATTER_MQ_DIAGNOSTICS_AGE_UNAVAILABLE UINT32_MAX
 
 typedef enum {
     MATTER_AIR_QUALITY_UNKNOWN = 0,
