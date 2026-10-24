@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <math.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -141,6 +142,18 @@ static const char *threshold_state_to_string(mq_sensor_threshold_state_t state)
 static bool float_close(float a, float b)
 {
     return fabsf(a - b) <= 0.0001f;
+}
+
+static int32_t ratio_to_milli_saturated(float value)
+{
+    if (!isfinite(value) || value <= 0.0f) {
+        return 0;
+    }
+    const double scaled = (double)value * 1000.0;
+    if (scaled >= (double)INT32_MAX) {
+        return INT32_MAX;
+    }
+    return (int32_t)(scaled + 0.5);
 }
 
 static bool get_effective_sensor_by_id(uint8_t id, mq_sensor_config_t *out, size_t *index_out)
@@ -613,7 +626,8 @@ static void validate_config(void)
         ++errors;
     }
     const size_t expected_diag_attrs = MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT *
-                                       MATTER_MQ_DIAGNOSTICS_ATTRS_PER_SENSOR;
+                                       MATTER_MQ_DIAGNOSTICS_ATTRS_PER_SENSOR +
+                                       MATTER_MQ_DIAGNOSTICS_GLOBAL_ATTR_COUNT;
     const size_t actual_diag_attrs = matter_air_quality_diagnostics_attribute_count();
     if (matter_air_quality_diagnostics_validate() != ESP_OK) {
         printf("error Matter diagnostics cluster or attributes missing\n");
@@ -806,6 +820,13 @@ static void set_threshold_command(int argc, char **argv, bool critical)
         printf("saved=false error=%s\n", esp_err_to_name(ESP_ERR_NOT_FOUND));
         return;
     }
+    mq_sensor_config_t latest = {0};
+    const esp_err_t load_err = mq_runtime_config_apply_sensor(id, &sensor, &latest);
+    if (load_err != ESP_OK) {
+        print_save_result(load_err);
+        return;
+    }
+    sensor = latest;
     if (critical) {
         sensor.critical_rs_ratio = ratio;
     } else {
@@ -854,8 +875,8 @@ static void print_aq_status(void)
            status.last_sample.adc_mv,
            status.last_sample.vrl_mv,
            status.last_sample.baseline_vrl_mv,
-           (long)(status.last_sample.rs_norm * 1000.0f + 0.5f),
-           (long)(status.last_sample.rs_ratio * 1000.0f + 0.5f),
+           (long)ratio_to_milli_saturated(status.last_sample.rs_norm),
+           (long)ratio_to_milli_saturated(status.last_sample.rs_ratio),
            (unsigned)status.successful_reads,
            (unsigned)status.failed_reads,
            (unsigned)status.matter_update_schedules,

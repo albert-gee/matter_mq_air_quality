@@ -38,6 +38,7 @@ static mq_sensor_config_t s_configs[MQ_SENSOR_MAX_SENSORS];
 static mq_sensor_sample_t s_last_samples[MQ_SENSOR_MAX_SENSORS];
 static mq_calibration_record_t s_calibrations[MQ_SENSOR_MAX_SENSORS];
 static TickType_t s_start_ticks[MQ_SENSOR_MAX_SENSORS];
+static bool s_warmup_complete[MQ_SENSOR_MAX_SENSORS];
 static SemaphoreHandle_t s_lock;
 static size_t s_sensor_count;
 
@@ -116,14 +117,22 @@ static void reset_sample(size_t index)
 
 static bool is_still_warming(size_t index)
 {
+    if (s_warmup_complete[index]) {
+        return false;
+    }
     if (!s_configs[index].enabled || s_configs[index].warmup_seconds == 0U) {
+        s_warmup_complete[index] = true;
         return false;
     }
 
     const TickType_t elapsed_ticks = xTaskGetTickCount() - s_start_ticks[index];
     const uint64_t elapsed_ms = (uint64_t)elapsed_ticks * (uint64_t)portTICK_PERIOD_MS;
     const uint64_t required_ms = (uint64_t)s_configs[index].warmup_seconds * 1000ULL;
-    return elapsed_ms < required_ms;
+    if (elapsed_ms >= required_ms) {
+        s_warmup_complete[index] = true;
+        return false;
+    }
+    return true;
 }
 
 static mq_sensor_threshold_state_t threshold_state_for_sample(const mq_sensor_config_t *config,
@@ -280,6 +289,7 @@ esp_err_t mq_sensor_init(const mq_sensor_config_t *configs, size_t count)
     memset(s_last_samples, 0, sizeof(s_last_samples));
     memset(s_calibrations, 0, sizeof(s_calibrations));
     memset(s_start_ticks, 0, sizeof(s_start_ticks));
+    memset(s_warmup_complete, 0, sizeof(s_warmup_complete));
     memcpy(s_configs, source, source_count * sizeof(mq_sensor_config_t));
     s_sensor_count = source_count;
     s_initialized = true;

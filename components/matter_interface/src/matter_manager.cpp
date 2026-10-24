@@ -6,10 +6,33 @@
 #include <esp_matter.h>
 #include <esp_matter_console.h>
 #include <sdkconfig.h>
+#include <app/server/CommissioningWindowManager.h>
+#include <app/server/Server.h>
 
 static const char *TAG = "matter_manager";
 
 esp_err_t matter_create_air_quality_endpoint(esp_matter::node_t *matter_node, uint16_t *endpoint_id);
+
+static void open_commissioning_window_if_necessary()
+{
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() != 0) {
+        return;
+    }
+
+    chip::CommissioningWindowManager &commissioning =
+        chip::Server::GetInstance().GetCommissioningWindowManager();
+    if (commissioning.IsCommissioningWindowOpen()) {
+        return;
+    }
+
+    CHIP_ERROR err = commissioning.OpenBasicCommissioningWindow(
+        chip::System::Clock::Seconds16(300),
+        chip::CommissioningWindowAdvertisement::kDnssdOnly);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "failed to reopen commissioning window: 0x%08" PRIx32,
+                 err.AsInteger());
+    }
+}
 
 static void matter_event_callback(const ChipDeviceEvent *event, intptr_t arg)
 {
@@ -27,6 +50,10 @@ static void matter_event_callback(const ChipDeviceEvent *event, intptr_t arg)
         break;
     case chip::DeviceLayer::DeviceEventType::kServerReady:
         ESP_LOGI(TAG, "Matter server ready");
+        break;
+    case chip::DeviceLayer::DeviceEventType::kFabricRemoved:
+        ESP_LOGI(TAG, "Fabric removed");
+        open_commissioning_window_if_necessary();
         break;
     default:
         ESP_LOGI(TAG, "Matter event type: %d", event->Type);
@@ -96,7 +123,7 @@ esp_err_t matter_init(uint16_t *air_quality_endpoint_id)
     esp_matter::console::diagnostics_register_commands();
     esp_matter::console::wifi_register_commands();
 #if CONFIG_OPENTHREAD_CLI
-    console::otcli_register_commands();
+    esp_matter::console::otcli_register_commands();
 #endif
     esp_matter::console::init();
 #endif

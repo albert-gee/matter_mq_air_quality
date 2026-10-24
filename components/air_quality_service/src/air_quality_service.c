@@ -1,6 +1,8 @@
 #include "air_quality_service.h"
 
 #include <string.h>
+#include <limits.h>
+#include <math.h>
 
 #include "esp_check.h"
 #include "esp_log.h"
@@ -59,10 +61,14 @@ static matter_air_quality_level_t map_ratio_to_level(float ratio)
 
 static int32_t ratio_to_milli(float value)
 {
-    if (value <= 0.0f) {
+    if (!isfinite(value) || value <= 0.0f) {
         return 0;
     }
-    return (int32_t)(value * 1000.0f + 0.5f);
+    const double scaled = (double)value * 1000.0;
+    if (scaled >= (double)INT32_MAX) {
+        return INT32_MAX;
+    }
+    return (int32_t)(scaled + 0.5);
 }
 
 static void init_diagnostics_defaults(matter_air_quality_diagnostics_t *diagnostics)
@@ -105,9 +111,6 @@ static uint32_t sample_age_ms(uint32_t now_ms, const mq_sensor_sample_t *sample)
 {
     if (sample == NULL || sample->updated_at_ms == 0U) {
         return UINT32_MAX;
-    }
-    if (now_ms < sample->updated_at_ms) {
-        return 0;
     }
     return now_ms - sample->updated_at_ms;
 }
@@ -382,6 +385,36 @@ esp_err_t air_quality_service_start(void)
     return ESP_OK;
 }
 
+static void publish_stopped_diagnostics(const air_quality_service_config_t *config)
+{
+    matter_air_quality_diagnostics_t diagnostics;
+    init_diagnostics_defaults(&diagnostics);
+    const uint32_t now_ms = aq_now_ms();
+    const size_t count = mq_sensor_count();
+
+    for (size_t i = 0; i < count; ++i) {
+        mq_sensor_config_t sensor_config;
+        mq_sensor_sample_t sample;
+        if (mq_sensor_get_config_by_index(i, &sensor_config) != ESP_OK ||
+            sensor_config.id >= MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT ||
+            mq_sensor_get_last(sensor_config.id, &sample) != ESP_OK) {
+            continue;
+        }
+        if (sensor_config.id == config->primary_sensor_id) {
+            sample.state = MQ_SENSOR_STATE_STALE;
+        }
+        fill_sensor_diagnostics(&diagnostics.sensors[sensor_config.id],
+                                &sensor_config, &sample,
+                                sample_age_ms(now_ms, &sample));
+    }
+
+    const esp_err_t err = matter_update_air_quality_diagnostics(
+        config->matter_endpoint_id, &diagnostics);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "failed to publish stopped diagnostics: %s", esp_err_to_name(err));
+    }
+}
+
 esp_err_t air_quality_service_stop(void)
 {
     ESP_RETURN_ON_ERROR(aq_lock(), TAG, "failed to lock service");
@@ -394,22 +427,50 @@ esp_err_t air_quality_service_stop(void)
         return ESP_OK;
     }
     s_status.running = false;
+    s_status.current_level = MATTER_AIR_QUALITY_UNKNOWN;
+    s_status.last_sample.state = MQ_SENSOR_STATE_STALE;
+    s_status.last_sample_age_ms = s_status.last_success_ms == 0U
+                                      ? UINT32_MAX
+                                      : aq_now_ms() - s_status.last_success_ms;
+    s_status.filtered_ratio = 0.0f;
+    s_have_filtered_ratio = false;
+    const bool publish_unknown = s_config.publish_to_matter;
+    const uint16_t endpoint_id = s_config.matter_endpoint_id;
+    const air_quality_service_config_t config = s_config;
     aq_unlock();
 
     uint32_t waited_ms = 0;
+    bool stopped = false;
     while (waited_ms < AQ_SERVICE_STOP_TIMEOUT_MS) {
         ESP_RETURN_ON_ERROR(aq_lock(), TAG, "failed to lock service");
-        const bool stopped = s_task_handle == NULL;
+        stopped = s_task_handle == NULL;
         aq_unlock();
         if (stopped) {
-            ESP_LOGI(TAG, "Air Quality service stopped");
-            return ESP_OK;
+            break;
         }
         vTaskDelay(pdMS_TO_TICKS(50));
         waited_ms += 50;
     }
+    if (!stopped) {
+        return ESP_ERR_TIMEOUT;
+    }
 
-    return ESP_ERR_TIMEOUT;
+    if (publish_unknown) {
+        const esp_err_t publish_err = matter_update_air_quality(
+            endpoint_id, MATTER_AIR_QUALITY_UNKNOWN);
+        if (publish_err != ESP_OK) {
+            ESP_LOGW(TAG, "failed to publish UNKNOWN while stopping: %s",
+                     esp_err_to_name(publish_err));
+        } else if (aq_lock() == ESP_OK) {
+            s_status.last_scheduled_level = MATTER_AIR_QUALITY_UNKNOWN;
+            ++s_status.matter_update_schedules;
+            aq_unlock();
+        }
+        publish_stopped_diagnostics(&config);
+    }
+
+    ESP_LOGI(TAG, "Air Quality service stopped");
+    return ESP_OK;
 }
 
 esp_err_t air_quality_service_get_status(air_quality_service_status_t *out)
@@ -421,6 +482,9 @@ esp_err_t air_quality_service_get_status(air_quality_service_status_t *out)
         return ESP_ERR_INVALID_STATE;
     }
     *out = s_status;
+    if (!out->running && out->last_success_ms != 0U) {
+        out->last_sample_age_ms = aq_now_ms() - out->last_success_ms;
+    }
     aq_unlock();
     return ESP_OK;
 }

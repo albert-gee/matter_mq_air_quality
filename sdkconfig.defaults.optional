@@ -1,0 +1,2 @@
+# Optional configuration build coverage.
+CONFIG_OPENTHREAD_CLI=y

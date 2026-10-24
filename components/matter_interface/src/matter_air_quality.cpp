@@ -24,7 +24,8 @@ static constexpr uint32_t kAttrLastUpdateAgeMsSuffix = 0x0B;
 static constexpr uint32_t kAttrBaselineValidSuffix = 0x0C;
 static constexpr uint32_t kAttrBlockStride = 0x20;
 static constexpr size_t kExpectedDiagnosticsAttributeCount =
-    MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT * MATTER_MQ_DIAGNOSTICS_ATTRS_PER_SENSOR;
+    MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT * MATTER_MQ_DIAGNOSTICS_ATTRS_PER_SENSOR +
+    MATTER_MQ_DIAGNOSTICS_GLOBAL_ATTR_COUNT;
 static constexpr uint8_t kDefaultSensorTypes[MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT] = {
     8, 0, 1, 2, 3, 4, 5, 6, 7,
 };
@@ -41,6 +42,7 @@ typedef struct {
 
 static bool s_diagnostics_ready;
 static size_t s_diagnostics_attribute_count;
+static esp_matter::cluster_t *s_diagnostics_cluster;
 
 static esp_err_t update_attribute(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id,
                                   esp_matter_attr_val_t *value)
@@ -65,6 +67,14 @@ static esp_err_t create_diagnostics_attributes(esp_matter::cluster_t *cluster)
     ESP_RETURN_ON_FALSE(cluster != nullptr, ESP_ERR_INVALID_ARG, TAG, "diagnostics cluster is required");
 
     size_t created = 0;
+    ESP_RETURN_ON_FALSE(
+        esp_matter::cluster::global::attribute::create_feature_map(cluster, 0) != nullptr,
+        ESP_FAIL, TAG, "failed to create diagnostics FeatureMap");
+    ++created;
+    ESP_RETURN_ON_FALSE(
+        esp_matter::cluster::global::attribute::create_cluster_revision(cluster, 1) != nullptr,
+        ESP_FAIL, TAG, "failed to create diagnostics ClusterRevision");
+    ++created;
     for (uint8_t sensor_id = 0; sensor_id < MATTER_MQ_DIAGNOSTICS_SENSOR_COUNT; ++sensor_id) {
         const struct {
             uint32_t suffix;
@@ -175,6 +185,7 @@ esp_err_t matter_create_air_quality_endpoint(esp_matter::node_t *matter_node, ui
     ESP_RETURN_ON_FALSE(endpoint_id != nullptr, ESP_ERR_INVALID_ARG, TAG, "endpoint id output is required");
     s_diagnostics_ready = false;
     s_diagnostics_attribute_count = 0;
+    s_diagnostics_cluster = nullptr;
 
     esp_matter::endpoint::air_quality_sensor::config_t endpoint_config;
 
@@ -183,6 +194,19 @@ esp_err_t matter_create_air_quality_endpoint(esp_matter::node_t *matter_node, ui
     ESP_RETURN_ON_FALSE(endpoint != nullptr, ESP_FAIL, TAG, "failed to create Air Quality endpoint");
 
     *endpoint_id = esp_matter::endpoint::get_id(endpoint);
+    esp_matter::cluster_t *air_quality_cluster = esp_matter::cluster::get(
+        endpoint, chip::app::Clusters::AirQuality::Id);
+    ESP_RETURN_ON_FALSE(air_quality_cluster != nullptr, ESP_FAIL, TAG,
+                        "failed to find Air Quality cluster");
+    ESP_RETURN_ON_ERROR(esp_matter::cluster::air_quality::feature::fair::add(air_quality_cluster),
+                        TAG, "failed to add Fair feature");
+    ESP_RETURN_ON_ERROR(esp_matter::cluster::air_quality::feature::moderate::add(air_quality_cluster),
+                        TAG, "failed to add Moderate feature");
+    ESP_RETURN_ON_ERROR(esp_matter::cluster::air_quality::feature::very_poor::add(air_quality_cluster),
+                        TAG, "failed to add VeryPoor feature");
+    ESP_RETURN_ON_ERROR(esp_matter::cluster::air_quality::feature::extremely_poor::add(air_quality_cluster),
+                        TAG, "failed to add ExtremelyPoor feature");
+
     esp_matter::cluster_t *diagnostics_cluster = esp_matter::cluster::create(
         endpoint,
         MATTER_MQ_DIAGNOSTICS_CLUSTER_ID,
@@ -190,6 +214,7 @@ esp_err_t matter_create_air_quality_endpoint(esp_matter::node_t *matter_node, ui
     ESP_RETURN_ON_FALSE(diagnostics_cluster != nullptr, ESP_FAIL, TAG,
                         "failed to create MQ diagnostics cluster 0x%08lx",
                         (unsigned long)MATTER_MQ_DIAGNOSTICS_CLUSTER_ID);
+    s_diagnostics_cluster = diagnostics_cluster;
     ESP_RETURN_ON_ERROR(create_diagnostics_attributes(diagnostics_cluster),
                         TAG, "failed to create MQ diagnostics attributes");
 
@@ -258,6 +283,18 @@ esp_err_t matter_air_quality_diagnostics_validate(void)
                         "MQ diagnostics attr count %u expected %u",
                         (unsigned)s_diagnostics_attribute_count,
                         (unsigned)kExpectedDiagnosticsAttributeCount);
+    ESP_RETURN_ON_FALSE(s_diagnostics_cluster != nullptr, ESP_ERR_INVALID_STATE, TAG,
+                        "MQ diagnostics cluster pointer is missing");
+    ESP_RETURN_ON_FALSE(
+        esp_matter::attribute::get(
+            s_diagnostics_cluster,
+            chip::app::Clusters::Globals::Attributes::FeatureMap::Id) != nullptr,
+        ESP_ERR_INVALID_STATE, TAG, "MQ diagnostics FeatureMap is missing");
+    ESP_RETURN_ON_FALSE(
+        esp_matter::attribute::get(
+            s_diagnostics_cluster,
+            chip::app::Clusters::Globals::Attributes::ClusterRevision::Id) != nullptr,
+        ESP_ERR_INVALID_STATE, TAG, "MQ diagnostics ClusterRevision is missing");
     return ESP_OK;
 }
 

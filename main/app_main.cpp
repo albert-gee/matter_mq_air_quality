@@ -16,6 +16,8 @@
 #include "mq_runtime_config.h"
 #include "mq_sensor.h"
 
+#include <platform/CHIPDeviceConfig.h>
+
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include <platform/ESP32/OpenthreadLauncher.h>
 #endif
